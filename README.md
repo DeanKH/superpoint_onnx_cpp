@@ -1,0 +1,1 @@
+./superpoint_onnx_demo ../weights/superpoint.onnx ../assets/container_front02.png ../assets/focus_descriptors.csv

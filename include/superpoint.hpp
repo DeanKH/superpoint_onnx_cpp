@@ -175,7 +175,7 @@ private:
                                          input_tensors.size(), output_node_names_.data(), output_node_names_.size());
       auto end_time = std::chrono::high_resolution_clock::now();
       std::chrono::duration<double, std::milli> duration = end_time - start_time;
-
+      std::cout << "Inference time: " << duration.count() << " ms" << std::endl;
       //  check output format
       for (const auto& tensor : output_tensor)
       {

@@ -1,4 +1,5 @@
 #include "superpoint.hpp"
+#include <eigen3/Eigen/Dense>
 #include <fstream>
 #include <iostream>
 #include <opencv2/core.hpp>
@@ -67,6 +68,49 @@ cv::Mat computeRowL2Norms(const cv::Mat& mat)
   return norms;
 }
 
+Eigen::VectorXf computeRowL2Norms(const Eigen::MatrixXf& mat)
+{
+  return mat.rowwise().norm();
+}
+
+// --- cv::Mat -> Eigen::MatrixXf 変換 ---
+Eigen::MatrixXf cvMatToEigen(const cv::Mat& mat)
+{
+  CV_Assert(mat.type() == CV_32F);  // float型前提
+  Eigen::MatrixXf eigen_mat(mat.rows, mat.cols);
+  for (int i = 0; i < mat.rows; ++i)
+    for (int j = 0; j < mat.cols; ++j)
+      eigen_mat(i, j) = mat.at<float>(i, j);
+  return eigen_mat;
+}
+
+Eigen::MatrixXf computeSimilarityMatrix(const cv::Mat& cv_descriptors, const cv::Mat& cv_vocab)
+{
+  // 1. 変換
+  Eigen::MatrixXf descriptors = cvMatToEigen(cv_descriptors);  // NxD
+  Eigen::MatrixXf vocab = cvMatToEigen(cv_vocab);              // MxD
+
+  // 2. L2ノルム
+  Eigen::VectorXf desc_norms = computeRowL2Norms(descriptors);  // Nx1
+  Eigen::VectorXf vocab_norms = computeRowL2Norms(vocab);       // Mx1
+
+  // 3. ノルムの外積 → MxN の正規化係数行列
+  Eigen::MatrixXf norm_matrix = vocab_norms * desc_norms.transpose();  // MxN
+  std::cout << "Norm matrix shape: " << norm_matrix.rows() << "x" << norm_matrix.cols() << std::endl;
+
+  // 4. 内積計算 vocab * descriptors.T → MxN
+  Eigen::MatrixXf dot_product = vocab * descriptors.transpose();  // MxN
+  std::cout << "Dot product shape: " << dot_product.rows() << "x" << dot_product.cols() << std::endl;
+
+  // 5. コサイン類似度 = 内積 / ノルム
+  Eigen::MatrixXf similarity_matrix = dot_product.array() / norm_matrix.array();  // MxN
+
+  // 6. 転置（元コードと合わせる）
+  similarity_matrix.transposeInPlace();  // NxM
+  std::cout << "Similarity matrix shape: " << similarity_matrix.rows() << "x" << similarity_matrix.cols() << std::endl;
+  return similarity_matrix;
+}
+
 int main(int argc, char** argv)
 {
   std::string model_path = std::string(argv[1]);
@@ -90,31 +134,23 @@ int main(int argc, char** argv)
   superpoint.extract(image);
 
   auto result = superpoint.extract(image);
-  cv::Mat desc_norms = computeRowL2Norms(result.descriptors);
-  cv::Mat norm_matrix = vocab_norms * desc_norms.t();
-  std::cout << "Norm matrix shape: " << norm_matrix.rows << "x" << norm_matrix.cols << std::endl;
 
-  // compare cosine similarity with vocabulary
-  cv::Mat dot_product = vocab * result.descriptors.t();
-  std::cout << "Dot product shape: " << dot_product.rows << "x" << dot_product.cols << std::endl;
+  auto start_time = std::chrono::high_resolution_clock::now();
 
-  cv::Mat similarity_matrix;
-  cv::divide(dot_product, norm_matrix, similarity_matrix);
-  similarity_matrix = similarity_matrix.t();
+  Eigen::MatrixXf similarity_matrix = computeSimilarityMatrix(result.descriptors, vocab);
 
-  // for (const auto& keypoint : result.keypoints)
+  auto end_time = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<double, std::milli> duration = end_time - start_time;
+  std::cout << "Calc similarity time: " << duration.count() << " ms" << std::endl;
+
   const double similarity_threshold = 0.6;
   for (size_t i = 0; i < result.keypoints.size(); ++i)
   {
-    const float* row_ptr = similarity_matrix.ptr<float>(i);
-    for (size_t j = 0; j < vocab.cols; ++j)
+    // similarity_matrixのi行目の要素の内，どれか一つでも閾値を超えるものがあるかどうか
+    if (similarity_matrix.row(i).maxCoeff() > similarity_threshold)
     {
-      if (row_ptr[j] > similarity_threshold)
-      {
-        const auto& keypoint = result.keypoints[i];
-        cv::circle(image, keypoint, 2, cv::Scalar(0, 255, 0), -1);
-        break;
-      }
+      const auto& keypoint = result.keypoints[i];
+      cv::circle(image, keypoint, 2, cv::Scalar(0, 255, 0), -1);
     }
   }
 
