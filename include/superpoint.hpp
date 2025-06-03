@@ -1,5 +1,6 @@
 #pragma once
 #include <cmath>
+#include <cstdint>
 #include <eigen3/Eigen/Core>
 #include <exception>
 #include <filesystem>
@@ -86,10 +87,7 @@ public:
         image, [](size_t a, size_t b) { return std::max(a, b); }, scale, cv::INTER_AREA);
 
     auto output_tensor = inference(preprocessed);
-    Result result;
-
-    result.keypoints = postprocess(output_tensor, scale);
-    return result;
+    return postprocess(output_tensor, scale);
   }
 
 private:
@@ -198,12 +196,13 @@ private:
     return std::vector<Ort::Value>{};  // Placeholder for actual inference logic
   }
 
-  std::vector<cv::Point2f> postprocess(const std::vector<Ort::Value>& tensor, double scale)
+  Result postprocess(const std::vector<Ort::Value>& tensor, double scale)
   {
     const std::vector<int64_t> keypoints_shape = tensor[0].GetTensorTypeAndShapeInfo().GetShape();
-    std::vector<cv::Point2f> keypoints;
+    Result result;
+    std::vector<cv::Point2f>& keypoints = result.keypoints;
     keypoints.reserve(keypoints_shape[1]);
-    const int64_t* const keypoints_data = (const int64_t* const)tensor[0].GetTensorData<void>();
+    const int64_t* const keypoints_data = tensor[0].GetTensorData<int64_t>();
 
     for (size_t i = 0; i < keypoints_shape[1] * 2; i += 2)
     {
@@ -211,12 +210,22 @@ private:
                              static_cast<float>(keypoints_data[i + 1]) / scale);
     }
     const std::vector<int64_t> score_shape = tensor[1].GetTensorTypeAndShapeInfo().GetShape();
-    std::vector<float> scores;
+    std::vector<float>& scores = result.scores;
+    scores.reserve(keypoints.size());
+    const float* const scores_data = tensor[1].GetTensorData<float>();
+    for (size_t i = 0; i < score_shape[1]; ++i)
+    {
+      scores.push_back(scores_data[i]);
+    }
 
+    // 1 x Num x 256
     const std::vector<int64_t> descriptors_shape = tensor[2].GetTensorTypeAndShapeInfo().GetShape();
-    const float* const descriptors_data = (const float* const)tensor[2].GetTensorData<void>();
+    // std::cout << "Descriptors shape: " << descriptors_shape[0] << "x" << descriptors_shape[1] << "x"
+    //           << descriptors_shape[2] << std::endl;
+    const float* const descriptors_data = (const float* const)tensor[2].GetTensorData<float>();
+    result.descriptors = cv::Mat(descriptors_shape[1], descriptors_shape[2], CV_32F, (void*)descriptors_data);
 
-    return keypoints;  // Return keypoints for now, scores and descriptors can be processed similarly
+    return result;
   }
 
   InputSize input_size_ = InputSize::kInputSize512;
